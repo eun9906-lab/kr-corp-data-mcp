@@ -90,7 +90,8 @@ function buildServer() {
           isError: true,
         };
       }
-      const url = `https://api.odcloud.kr/api/nts-businessman/v1/status?serviceKey=${NTS_SERVICE_KEY}`;
+      // 키에 +, =, / 같은 특수문자가 있어서 반드시 URL 인코딩을 해야 합니다.
+      const url = `https://api.odcloud.kr/api/nts-businessman/v1/status?serviceKey=${encodeURIComponent(NTS_SERVICE_KEY)}`;
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
