@@ -1,9 +1,13 @@
-// 국세청(공공데이터포털) + DART(전자공시시스템) 정보를 Claude가 조회할 수 있게 해주는
-// 원격 MCP(Model Context Protocol) 서버입니다.
+// 국세청(공공데이터포털) + DART(전자공시시스템) + 네이버 뉴스 정보를 Claude가 조회할 수 있게
+// 해주는 원격 MCP(Model Context Protocol) 서버입니다.
 //
 // 필요한 환경변수(Secrets):
-//   NTS_SERVICE_KEY  - data.go.kr에서 발급받은 "국세청_사업자등록정보 진위확인 및 상태조회" 서비스키 (Decoding 키)
-//   DART_API_KEY     - opendart.fss.or.kr에서 발급받은 인증키(40자리)
+//   NTS_SERVICE_KEY     - data.go.kr에서 발급받은 "국세청_사업자등록정보 진위확인 및 상태조회" 서비스키 (Decoding 키)
+//   DART_API_KEY        - opendart.fss.or.kr에서 발급받은 인증키(40자리)
+//   NAVER_APIHUB_KEY_ID - NAVER API HUB(네이버클라우드플랫폼)에서 발급받은 API Key ID
+//   NAVER_APIHUB_KEY    - NAVER API HUB(네이버클라우드플랫폼)에서 발급받은 API Key
+//     (주의: 2026.7.31부로 네이버 개발자센터의 검색 API 신규발급이 종료되어, 뉴스검색은
+//      NAVER API HUB(네이버클라우드플랫폼 산하, ncloud.com)를 통해 별도로 발급받아야 합니다.)
 //
 // 실행: node server.js  (PORT 환경변수로 포트 지정 가능, 기본 3000)
 
@@ -16,6 +20,8 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 
 const NTS_SERVICE_KEY = process.env.NTS_SERVICE_KEY || "";
 const DART_API_KEY = process.env.DART_API_KEY || "";
+const NAVER_APIHUB_KEY_ID = process.env.NAVER_APIHUB_KEY_ID || "";
+const NAVER_APIHUB_KEY = process.env.NAVER_APIHUB_KEY || "";
 const PORT = process.env.PORT || 3000;
 
 // ---------------------------------------------------------------------------
@@ -230,6 +236,187 @@ function buildServer() {
     }
   );
 
+  // 6) DART 공시 목록 조회 (개별 발행공시/주요사항보고서 등을 회차별로 확인할 때 사용)
+  server.registerTool(
+    "dart_disclosure_list",
+    {
+      title: "DART 공시 목록 조회",
+      description:
+        "corp_code로 특정 기간에 제출된 공시 목록(보고서명, 접수번호, 제출인, 접수일자)을 조회합니다. " +
+        "전환사채권발행결정·신주인수권부사채권발행결정처럼 재무제표에는 합계만 잡히는 개별 발행 건을 " +
+        "회차별로 빠짐없이 확인하고 싶을 때, 재무제표 대신 이 도구를 쓰세요. keyword를 주면 report_nm(보고서명)에 " +
+        "그 문자열이 포함된 공시만 걸러서 반환합니다(예: keyword='전환사채'). " +
+        "접수번호(rcept_no)로 공시 원문은 https://dart.fss.or.kr/dsaf001/main.do?rcpNo=접수번호 에서 볼 수 있습니다.",
+      inputSchema: {
+        corp_code: z.string().regex(/^\d{8}$/).describe("dart_find_company로 확인한 8자리 고유번호"),
+        bgn_de: z
+          .string()
+          .regex(/^\d{8}$/)
+          .optional()
+          .describe("검색 시작일 YYYYMMDD (생략 시 1년 전)"),
+        end_de: z
+          .string()
+          .regex(/^\d{8}$/)
+          .optional()
+          .describe("검색 종료일 YYYYMMDD (생략 시 오늘)"),
+        keyword: z
+          .string()
+          .optional()
+          .describe("보고서명(report_nm)에 포함된 문자열로 필터링 (예: '전환사채', '신주인수권부사채', '유상증자')"),
+        page_no: z.number().int().min(1).default(1).describe("페이지 번호"),
+        page_count: z.number().int().min(1).max(100).default(100).describe("페이지당 건수 (최대 100)"),
+      },
+    },
+    async ({ corp_code, bgn_de, end_de, keyword, page_no, page_count }) => {
+      if (!DART_API_KEY) {
+        return { content: [{ type: "text", text: "서버에 DART_API_KEY가 설정되어 있지 않습니다." }], isError: true };
+      }
+      const today = new Date();
+      const toYYYYMMDD = (d) =>
+        `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+      const effectiveEnd = end_de || toYYYYMMDD(today);
+      const oneYearAgo = new Date(today);
+      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+      const effectiveBgn = bgn_de || toYYYYMMDD(oneYearAgo);
+
+      const url =
+        `https://opendart.fss.or.kr/api/list.json?crtfc_key=${DART_API_KEY}` +
+        `&corp_code=${corp_code}&bgn_de=${effectiveBgn}&end_de=${effectiveEnd}` +
+        `&page_no=${page_no}&page_count=${page_count}`;
+      const res = await fetch(url);
+      const json = await res.json();
+
+      if (json.status !== "000") {
+        // 013 = 조회된 데이터가 없음 (정상 응답), 그 외는 실제 오류
+        return { content: [{ type: "text", text: JSON.stringify(json, null, 2) }] };
+      }
+
+      let list = json.list || [];
+      if (keyword) {
+        list = list.filter((item) => (item.report_nm || "").includes(keyword));
+      }
+
+      const result = {
+        status: json.status,
+        message: json.message,
+        total_count: json.total_count,
+        total_page: json.total_page,
+        page_no: json.page_no,
+        page_count: json.page_count,
+        filtered_count: list.length,
+        list: list.map((item) => ({
+          report_nm: item.report_nm,
+          rcept_no: item.rcept_no,
+          flr_nm: item.flr_nm,
+          rcept_dt: item.rcept_dt,
+          rm: item.rm,
+          detail_url: `https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${item.rcept_no}`,
+        })),
+      };
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  // 7) 네이버 뉴스 검색
+  server.registerTool(
+    "naver_news_search",
+    {
+      title: "네이버 뉴스 검색",
+      description:
+        "키워드로 네이버에 색인된 뉴스 기사를 검색해 제목, 요약(description), 원본 언론사 링크, 발행일을 반환합니다. " +
+        "기사 전문은 제공되지 않으므로 전체 내용이 필요하면 반환된 link를 별도로 열어서 확인해야 합니다.",
+      inputSchema: {
+        query: z.string().min(1).describe("검색할 키워드 (예: '태안군 폐기물시설', '풍무 도시개발')"),
+        display: z.number().int().min(1).max(100).default(10).describe("반환할 기사 개수 (최대 100)"),
+        sort: z
+          .enum(["sim", "date"])
+          .default("date")
+          .describe("sim=정확도순, date=최신순"),
+      },
+    },
+    async ({ query, display, sort }) => {
+      if (!NAVER_APIHUB_KEY_ID || !NAVER_APIHUB_KEY) {
+        return {
+          content: [
+            { type: "text", text: "서버에 NAVER_APIHUB_KEY_ID / NAVER_APIHUB_KEY가 설정되어 있지 않습니다." },
+          ],
+          isError: true,
+        };
+      }
+      // 2026.7.31부로 검색 API는 NAVER API HUB(네이버클라우드플랫폼)로 이관되어
+      // 도메인/경로/인증 헤더가 예전 openapi.naver.com 방식과 다릅니다.
+      const url =
+        `https://naverapihub.apigw.ntruss.com/search/v1/news?query=${encodeURIComponent(query)}` +
+        `&display=${display}&sort=${sort}`;
+      const res = await fetch(url, {
+        headers: {
+          "X-NCP-APIGW-API-KEY-ID": NAVER_APIHUB_KEY_ID,
+          "X-NCP-APIGW-API-KEY": NAVER_APIHUB_KEY,
+        },
+      });
+      const text = await res.text();
+      if (!res.ok) {
+        return {
+          content: [{ type: "text", text: `조회 실패 (HTTP ${res.status}): ${text}` }],
+          isError: true,
+        };
+      }
+      return { content: [{ type: "text", text }] };
+    }
+  );
+
+  // 8) 구글 뉴스 검색 (RSS, 가입/인증키 불필요)
+  server.registerTool(
+    "google_news_search",
+    {
+      title: "구글 뉴스 검색 (인증키 불필요)",
+      description:
+        "키워드로 구글 뉴스 RSS 피드를 검색해 최신 기사 제목, 링크, 발행일, 언론사를 반환합니다. " +
+        "별도 가입이나 API 키가 필요 없어 바로 사용할 수 있습니다. 다만 비공식 엔드포인트라 예고 없이 " +
+        "형식이 바뀔 수 있고, 링크는 news.google.com 리디렉션 링크입니다. 기사 전문은 제공되지 않습니다.",
+      inputSchema: {
+        query: z.string().min(1).describe("검색할 키워드 (예: '태안군 폐기물시설', '풍무 도시개발')"),
+        display: z.number().int().min(1).max(50).default(10).describe("반환할 기사 개수"),
+      },
+    },
+    async ({ query, display }) => {
+      const url =
+        `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ko&gl=KR&ceid=KR:ko`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        return {
+          content: [{ type: "text", text: `조회 실패 (HTTP ${res.status})` }],
+          isError: true,
+        };
+      }
+      const xmlText = await res.text();
+      try {
+        const parser = new XMLParser({ ignoreAttributes: false });
+        const parsed = parser.parse(xmlText);
+        const itemsRaw = parsed?.rss?.channel?.item || [];
+        const items = Array.isArray(itemsRaw) ? itemsRaw : [itemsRaw];
+        const results = items.slice(0, display).map((it) => ({
+          title: it.title,
+          link: it.link,
+          pubDate: it.pubDate,
+          source:
+            it.source && typeof it.source === "object" ? it.source["#text"] : it.source,
+        }));
+        if (results.length === 0) {
+          return {
+            content: [{ type: "text", text: `'${query}'(으)로 검색된 뉴스가 없습니다.` }],
+          };
+        }
+        return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+      } catch (e) {
+        return {
+          content: [{ type: "text", text: `RSS 파싱 오류: ${e.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
   return server;
 }
 
@@ -268,6 +455,8 @@ app.all("/mcp", async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`kr-corporate-data MCP server listening on port ${PORT}`);
-  console.log(`  NTS_SERVICE_KEY set: ${Boolean(NTS_SERVICE_KEY)}`);
-  console.log(`  DART_API_KEY set:    ${Boolean(DART_API_KEY)}`);
+  console.log(`  NTS_SERVICE_KEY set:     ${Boolean(NTS_SERVICE_KEY)}`);
+  console.log(`  DART_API_KEY set:        ${Boolean(DART_API_KEY)}`);
+  console.log(`  NAVER_APIHUB_KEY_ID set: ${Boolean(NAVER_APIHUB_KEY_ID)}`);
+  console.log(`  NAVER_APIHUB_KEY set:    ${Boolean(NAVER_APIHUB_KEY)}`);
 });
