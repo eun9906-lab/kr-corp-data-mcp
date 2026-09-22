@@ -66,6 +66,93 @@ async function loadCorpCodes() {
 }
 
 // ---------------------------------------------------------------------------
+// DART "주요사항보고서" 계열 이벤트 API 공통 등록 헬퍼
+// (corp_code + bgn_de + end_de 만 받는 동일한 형태의 API들을 간단히 추가하기 위함.
+//  M&A 실사(due diligence) 시 인수 대상 회사의 부실징후/법적리스크를 확인하는 용도.)
+// ---------------------------------------------------------------------------
+function registerDartEventTool(server, { name, title, description, endpoint }) {
+  server.registerTool(
+    name,
+    {
+      title,
+      description,
+      inputSchema: {
+        corp_code: z.string().regex(/^\d{8}$/).describe("dart_find_company로 확인한 8자리 고유번호"),
+        bgn_de: z
+          .string()
+          .regex(/^\d{8}$/)
+          .describe("검색 시작일 YYYYMMDD (2015년 이후)"),
+        end_de: z.string().regex(/^\d{8}$/).describe("검색 종료일 YYYYMMDD"),
+      },
+    },
+    async ({ corp_code, bgn_de, end_de }) => {
+      if (!DART_API_KEY) {
+        return { content: [{ type: "text", text: "서버에 DART_API_KEY가 설정되어 있지 않습니다." }], isError: true };
+      }
+      const url =
+        `https://opendart.fss.or.kr/api/${endpoint}.json?crtfc_key=${DART_API_KEY}` +
+        `&corp_code=${corp_code}&bgn_de=${bgn_de}&end_de=${end_de}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      return { content: [{ type: "text", text: JSON.stringify(json, null, 2) }] };
+    }
+  );
+}
+
+// corp_code + 사업연도 + 보고서코드 형태의 "정기보고서 주요정보" API 공통 등록 헬퍼
+function registerDartPeriodicTool(server, { name, title, description, endpoint }) {
+  server.registerTool(
+    name,
+    {
+      title,
+      description,
+      inputSchema: {
+        corp_code: z.string().regex(/^\d{8}$/).describe("dart_find_company로 확인한 8자리 고유번호"),
+        bsns_year: z.string().regex(/^\d{4}$/).describe("사업연도 4자리 (예: '2024'), 2015년 이후"),
+        reprt_code: z
+          .enum(["11013", "11012", "11014", "11011"])
+          .default("11011")
+          .describe("11013=1분기, 11012=반기, 11014=3분기, 11011=사업(연간)보고서"),
+      },
+    },
+    async ({ corp_code, bsns_year, reprt_code }) => {
+      if (!DART_API_KEY) {
+        return { content: [{ type: "text", text: "서버에 DART_API_KEY가 설정되어 있지 않습니다." }], isError: true };
+      }
+      const url =
+        `https://opendart.fss.or.kr/api/${endpoint}.json?crtfc_key=${DART_API_KEY}` +
+        `&corp_code=${corp_code}&bsns_year=${bsns_year}&reprt_code=${reprt_code}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      return { content: [{ type: "text", text: JSON.stringify(json, null, 2) }] };
+    }
+  );
+}
+
+// corp_code만 받는 "지분공시 종합정보" API 공통 등록 헬퍼
+function registerDartCorpOnlyTool(server, { name, title, description, endpoint }) {
+  server.registerTool(
+    name,
+    {
+      title,
+      description,
+      inputSchema: {
+        corp_code: z.string().regex(/^\d{8}$/).describe("dart_find_company로 확인한 8자리 고유번호"),
+      },
+    },
+    async ({ corp_code }) => {
+      if (!DART_API_KEY) {
+        return { content: [{ type: "text", text: "서버에 DART_API_KEY가 설정되어 있지 않습니다." }], isError: true };
+      }
+      const url = `https://opendart.fss.or.kr/api/${endpoint}.json?crtfc_key=${DART_API_KEY}&corp_code=${corp_code}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      return { content: [{ type: "text", text: JSON.stringify(json, null, 2) }] };
+    }
+  );
+}
+
+// ---------------------------------------------------------------------------
 // MCP 서버 정의
 // ---------------------------------------------------------------------------
 function buildServer() {
@@ -381,7 +468,38 @@ function buildServer() {
     }
   );
 
-  // 9) 네이버 뉴스 검색
+  // 9) DART 교환사채권 발행결정 상세 (금액/교환가액/만기일 등 구조화된 조건)
+  server.registerTool(
+    "dart_eb_issuance",
+    {
+      title: "DART 교환사채권 발행결정 상세 조회",
+      description:
+        "corp_code와 기간으로 '교환사채권발행결정' 주요사항보고서의 상세 조건(권면총액, 교환가액, 만기일, " +
+        "청약일, 납입일 등)을 회차별로 조회합니다. 전환사채(CB)·신주인수권부사채(BW)와 함께 메자닌 채권의 " +
+        "세 번째 유형인 교환사채(EB) 발행 이력을 확인할 때 쓰세요. 2015년 이후 자료만 제공됩니다.",
+      inputSchema: {
+        corp_code: z.string().regex(/^\d{8}$/).describe("dart_find_company로 확인한 8자리 고유번호"),
+        bgn_de: z
+          .string()
+          .regex(/^\d{8}$/)
+          .describe("검색 시작일 YYYYMMDD (2015년 이후)"),
+        end_de: z.string().regex(/^\d{8}$/).describe("검색 종료일 YYYYMMDD"),
+      },
+    },
+    async ({ corp_code, bgn_de, end_de }) => {
+      if (!DART_API_KEY) {
+        return { content: [{ type: "text", text: "서버에 DART_API_KEY가 설정되어 있지 않습니다." }], isError: true };
+      }
+      const url =
+        `https://opendart.fss.or.kr/api/exbdIsDecsn.json?crtfc_key=${DART_API_KEY}` +
+        `&corp_code=${corp_code}&bgn_de=${bgn_de}&end_de=${end_de}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      return { content: [{ type: "text", text: JSON.stringify(json, null, 2) }] };
+    }
+  );
+
+  // 10) 네이버 뉴스 검색
   server.registerTool(
     "naver_news_search",
     {
@@ -429,7 +547,7 @@ function buildServer() {
     }
   );
 
-  // 10) 구글 뉴스 검색 (RSS, 가입/인증키 불필요)
+  // 11) 구글 뉴스 검색 (RSS, 가입/인증키 불필요)
   server.registerTool(
     "google_news_search",
     {
@@ -480,6 +598,168 @@ function buildServer() {
       }
     }
   );
+
+  // 12~19) M&A 실사(due diligence)용 DART 부실징후/법적리스크 이벤트 API 모음
+  registerDartEventTool(server, {
+    name: "dart_litigation",
+    title: "DART 소송 등의 제기 조회",
+    description:
+      "corp_code와 기간으로 회사가 당사자인 소송 제기 공시를 조회합니다(사건명, 원고/신청인, 청구내용, " +
+      "관할법원, 향후대책 등). M&A 실사에서 인수 대상 회사의 법적 리스크를 파악할 때 가장 먼저 확인해야 " +
+      "할 항목입니다. 2015년 이후 자료만 제공됩니다.",
+    endpoint: "lwstLg",
+  });
+  registerDartEventTool(server, {
+    name: "dart_default_occurrence",
+    title: "DART 부도발생 조회",
+    description:
+      "corp_code와 기간으로 어음·수표 부도발생 공시를 조회합니다(부도내용, 부도금액, 부도발생은행, " +
+      "최종부도일자, 부도사유 등). 2015년 이후 자료만 제공됩니다.",
+    endpoint: "dfOcr",
+  });
+  registerDartEventTool(server, {
+    name: "dart_business_suspension",
+    title: "DART 영업정지 조회",
+    description:
+      "corp_code와 기간으로 영업정지 관련 공시를 조회합니다(영업정지 분야/내용/사유/일자 등). " +
+      "2015년 이후 자료만 제공됩니다.",
+    endpoint: "bsnSp",
+  });
+  registerDartEventTool(server, {
+    name: "dart_rehabilitation_filing",
+    title: "DART 회생절차 개시신청 조회",
+    description:
+      "corp_code와 기간으로 법원에 회생절차(옛 법정관리) 개시를 신청한 공시를 조회합니다(신청인, 관할법원, " +
+      "신청사유, 신청일자, 향후대책 등). 2015년 이후 자료만 제공됩니다.",
+    endpoint: "ctrcvsBgrq",
+  });
+  registerDartEventTool(server, {
+    name: "dart_creditor_bank_management_start",
+    title: "DART 채권은행 등의 관리절차 개시 조회",
+    description:
+      "corp_code와 기간으로 채권은행 공동관리(워크아웃 등) 절차 개시 공시를 조회합니다(관리기관, 관리기간, " +
+      "관리사유 등). 2015년 이후 자료만 제공됩니다.",
+    endpoint: "bnkMngtPcbg",
+  });
+  registerDartEventTool(server, {
+    name: "dart_creditor_bank_management_stop",
+    title: "DART 채권은행 등의 관리절차 중단 조회",
+    description:
+      "corp_code와 기간으로 채권은행 공동관리(워크아웃 등) 절차가 중단(졸업 또는 실패)된 공시를 조회합니다. " +
+      "dart_creditor_bank_management_start와 짝을 이루어, 관리절차가 아직 진행 중인지 끝났는지 확인할 때 " +
+      "쓰세요. 2015년 이후 자료만 제공됩니다.",
+    endpoint: "bnkMngtPcsp",
+  });
+  registerDartEventTool(server, {
+    name: "dart_dissolution_reason",
+    title: "DART 해산사유 발생 조회",
+    description:
+      "corp_code와 기간으로 회사의 해산사유 발생 공시를 조회합니다(해산사유, 해산결정일 등). " +
+      "2015년 이후 자료만 제공됩니다.",
+    endpoint: "dsRsOcr",
+  });
+  registerDartEventTool(server, {
+    name: "dart_capital_reduction",
+    title: "DART 감자 결정 조회",
+    description:
+      "corp_code와 기간으로 감자(자본금 감소) 결정 공시를 조회합니다(감자 전/후 자본금, 감자비율, 감자방법, " +
+      "이사회결의일 등). 과거 자본잠식·부실 이력을 파악하는 데 유용합니다. 2015년 이후 자료만 제공됩니다.",
+    endpoint: "crDecsn",
+  });
+
+  // 20~29) M&A 실사용 지배구조/지분/재무구조 정기보고서 API 모음 (corp_code + 사업연도 + 보고서코드)
+  registerDartPeriodicTool(server, {
+    name: "dart_major_shareholder_status",
+    title: "DART 최대주주 현황 조회",
+    description:
+      "corp_code, 사업연도, 보고서코드로 최대주주 성명과 소유주식수/지분율을 조회합니다. " +
+      "M&A 실사에서 실제 지배주주와 지분율을 확인하는 기본 자료입니다.",
+    endpoint: "hyslrSttus",
+  });
+  registerDartPeriodicTool(server, {
+    name: "dart_major_shareholder_change",
+    title: "DART 최대주주 변동현황 조회",
+    description:
+      "corp_code, 사업연도, 보고서코드로 최대주주가 바뀐 이력(변동일, 변동 후 최대주주명, 소유주식수, 지분율, " +
+      "변동원인)을 조회합니다. 경영권 변동이나 지분 매각·담보실행 이력을 파악할 때 중요합니다.",
+    endpoint: "hyslrChgSttus",
+  });
+  registerDartPeriodicTool(server, {
+    name: "dart_minor_shareholder_status",
+    title: "DART 소액주주 현황 조회",
+    description: "corp_code, 사업연도, 보고서코드로 소액주주 수와 지분율을 조회합니다.",
+    endpoint: "mrhlSttus",
+  });
+  registerDartPeriodicTool(server, {
+    name: "dart_total_stock_status",
+    title: "DART 주식의 총수 현황 조회",
+    description:
+      "corp_code, 사업연도, 보고서코드로 발행할 주식의 총수, 현재까지 발행한 주식의 총수, 유통주식수 등을 조회합니다.",
+    endpoint: "stockTotqySttus",
+  });
+  registerDartPeriodicTool(server, {
+    name: "dart_other_corp_investment",
+    title: "DART 타법인 출자현황 조회",
+    description:
+      "corp_code, 사업연도, 보고서코드로 이 회사가 다른 법인에 출자한 현황(피출자회사명, 최초취득일자, " +
+      "출자목적, 기말 지분율/장부가액, 피출자회사의 최근 자산총계·당기순이익 등)을 조회합니다. " +
+      "M&A 실사에서 자회사·계열사·관계사 구조를 파악하는 데 핵심적입니다.",
+    endpoint: "otrCprInvstmntSttus",
+  });
+  registerDartPeriodicTool(server, {
+    name: "dart_dividend",
+    title: "DART 배당에 관한 사항 조회",
+    description: "corp_code, 사업연도, 보고서코드로 주당배당금 등 배당 관련 사항을 조회합니다.",
+    endpoint: "alotMatter",
+  });
+  registerDartPeriodicTool(server, {
+    name: "dart_capital_change",
+    title: "DART 증자(감자) 현황 조회",
+    description:
+      "corp_code, 사업연도, 보고서코드로 해당 사업연도 중 증자 또는 감자 이력(일자, 수량, 주당금액 등)을 조회합니다.",
+    endpoint: "irdsSttus",
+  });
+  registerDartPeriodicTool(server, {
+    name: "dart_bond_outstanding",
+    title: "DART 회사채 미상환 잔액 조회",
+    description:
+      "corp_code, 사업연도, 보고서코드로 회사채의 만기별(1년 이하/1~2년/2~3년/.../10년초과) 미상환 잔액을 " +
+      "조회합니다. 향후 몇 년간 상환 부담이 어떻게 분포되어 있는지 파악할 때 씁니다.",
+    endpoint: "cprndNrdmpBlce",
+  });
+  registerDartPeriodicTool(server, {
+    name: "dart_audit_opinion",
+    title: "DART 회계감사인의 명칭 및 감사의견 조회",
+    description:
+      "corp_code, 사업연도, 보고서코드로 감사인명과 감사의견(적정/한정/부적정/의견거절), 강조사항, 핵심감사사항을 " +
+      "조회합니다. M&A 실사에서 재무제표 신뢰도를 확인하는 가장 기본적인 체크포인트입니다.",
+    endpoint: "accnutAdtorNmNdAdtOpinion",
+  });
+  registerDartPeriodicTool(server, {
+    name: "dart_employee_status",
+    title: "DART 직원 현황 조회",
+    description:
+      "corp_code, 사업연도, 보고서코드로 성별 직원 수, 평균근속연수, 1인평균급여 등을 조회합니다.",
+    endpoint: "empSttus",
+  });
+
+  // 30~31) M&A 실사용 지분공시 API (corp_code만 필요, 기간 지정 없이 전체 이력)
+  registerDartCorpOnlyTool(server, {
+    name: "dart_major_stock_report",
+    title: "DART 대량보유 상황보고 조회",
+    description:
+      "corp_code만으로 5% 이상 대량보유자의 보유주식수/비율 변동 보고 이력 전체(보고사유 포함)를 조회합니다. " +
+      "지분 변동 이력을 시계열로 파악할 때 유용합니다.",
+    endpoint: "majorstock",
+  });
+  registerDartCorpOnlyTool(server, {
+    name: "dart_insider_stock_report",
+    title: "DART 임원·주요주주 소유보고 조회",
+    description:
+      "corp_code만으로 임원 및 주요주주의 지분 소유/변동 보고 이력 전체를 조회합니다(등기/비등기 임원 구분, " +
+      "직위, 소유 증감 수량/비율 포함).",
+    endpoint: "elestock",
+  });
 
   return server;
 }
