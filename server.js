@@ -451,3 +451,76 @@ function buildServer() {
         return {
           content: [{ type: "text", text: `조회 실패 (HTTP ${res.status})` }],
           isError: true,
+        };
+      }
+      const xmlText = await res.text();
+      try {
+        const parser = new XMLParser({ ignoreAttributes: false });
+        const parsed = parser.parse(xmlText);
+        const itemsRaw = parsed?.rss?.channel?.item || [];
+        const items = Array.isArray(itemsRaw) ? itemsRaw : [itemsRaw];
+        const results = items.slice(0, display).map((it) => ({
+          title: it.title,
+          link: it.link,
+          pubDate: it.pubDate,
+          source:
+            it.source && typeof it.source === "object" ? it.source["#text"] : it.source,
+        }));
+        if (results.length === 0) {
+          return {
+            content: [{ type: "text", text: `'${query}'(으)로 검색된 뉴스가 없습니다.` }],
+          };
+        }
+        return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+      } catch (e) {
+        return {
+          content: [{ type: "text", text: `RSS 파싱 오류: ${e.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  return server;
+}
+
+// ---------------------------------------------------------------------------
+// HTTP (Streamable HTTP transport) - Claude 커스텀 커넥터가 이 엔드포인트로 접속합니다.
+// ---------------------------------------------------------------------------
+const app = express();
+app.use(express.json());
+
+app.get("/", (_req, res) => {
+  res.send("kr-corporate-data MCP server is running. Connect to POST/GET /mcp");
+});
+
+// 무상태(stateless) 모드: 요청마다 새 서버/트랜스포트를 만들고 끝나면 버립니다.
+// Render 무료 요금제는 안 쓰면 서버가 재시작되는데, 세션을 메모리에 들고 있으면
+// 재시작 직후 "Server not initialized" 오류가 나기 쉬워서 이 방식이 더 안정적입니다.
+app.all("/mcp", async (req, res) => {
+  try {
+    const server = buildServer();
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined, // 세션을 추적하지 않음 (요청마다 독립 처리)
+    });
+    res.on("close", () => {
+      transport.close();
+      server.close();
+    });
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  } catch (err) {
+    console.error("MCP request error:", err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "internal_error", message: String(err) });
+    }
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`kr-corporate-data MCP server listening on port ${PORT}`);
+  console.log(`  NTS_SERVICE_KEY set:     ${Boolean(NTS_SERVICE_KEY)}`);
+  console.log(`  DART_API_KEY set:        ${Boolean(DART_API_KEY)}`);
+  console.log(`  NAVER_APIHUB_KEY_ID set: ${Boolean(NAVER_APIHUB_KEY_ID)}`);
+  console.log(`  NAVER_APIHUB_KEY set:    ${Boolean(NAVER_APIHUB_KEY)}`);
+});
