@@ -127,9 +127,13 @@ function buildServer() {
           .filter((c) => (c.corp_name || "").includes(company_name))
           .slice(0, limit)
           .map((c) => ({
-            corp_code: c.corp_code,
+            // XML 파서가 앞자리 0을 숫자로 잘못 해석해 지워버리는 문제 보정
+            corp_code: String(c.corp_code).padStart(8, "0"),
             corp_name: c.corp_name,
-            stock_code: c.stock_code && String(c.stock_code).trim() ? c.stock_code : null,
+            stock_code:
+              c.stock_code && String(c.stock_code).trim()
+                ? String(c.stock_code).padStart(6, "0")
+                : null,
             modify_date: c.modify_date,
           }));
         if (matches.length === 0) {
