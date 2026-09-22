@@ -1,0 +1,24 @@
+{
+  "name": "dart-nts-mcp",
+  "version": "1.0.0",
+  "description": "Korean NTS business-status + DART corporate data remote MCP server",
+  "main": "server.js",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "adm-zip": "^0.6.1",
+    "express": "^5.2.1",
+    "fast-xml-parser": "^5.11.1",
+    "zod": "^4.6.5"
+  }
+}
