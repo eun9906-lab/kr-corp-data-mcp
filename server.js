@@ -13,7 +13,6 @@ import AdmZip from "adm-zip";
 import { XMLParser } from "fast-xml-parser";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { randomUUID } from "node:crypto";
 
 const NTS_SERVICE_KEY = process.env.NTS_SERVICE_KEY || "";
 const DART_API_KEY = process.env.DART_API_KEY || "";
@@ -243,29 +242,20 @@ app.get("/", (_req, res) => {
   res.send("kr-corporate-data MCP server is running. Connect to POST/GET /mcp");
 });
 
-const transports = {};
-
+// 무상태(stateless) 모드: 요청마다 새 서버/트랜스포트를 만들고 끝나면 버립니다.
+// Render 무료 요금제는 안 쓰면 서버가 재시작되는데, 세션을 메모리에 들고 있으면
+// 재시작 직후 "Server not initialized" 오류가 나기 쉬워서 이 방식이 더 안정적입니다.
 app.all("/mcp", async (req, res) => {
   try {
-    const sessionId = req.headers["mcp-session-id"];
-    let transport;
-
-    if (sessionId && transports[sessionId]) {
-      transport = transports[sessionId];
-    } else {
-      transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-        onsessioninitialized: (id) => {
-          transports[id] = transport;
-        },
-      });
-      transport.onclose = () => {
-        if (transport.sessionId) delete transports[transport.sessionId];
-      };
-      const server = buildServer();
-      await server.connect(transport);
-    }
-
+    const server = buildServer();
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined, // 세션을 추적하지 않음 (요청마다 독립 처리)
+    });
+    res.on("close", () => {
+      transport.close();
+      server.close();
+    });
+    await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
   } catch (err) {
     console.error("MCP request error:", err);
