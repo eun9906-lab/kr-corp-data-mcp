@@ -317,7 +317,71 @@ function buildServer() {
     }
   );
 
-  // 7) 네이버 뉴스 검색
+  // 7) DART 전환사채권 발행결정 상세 (금액/전환가액/만기일 등 구조화된 조건)
+  server.registerTool(
+    "dart_cb_issuance",
+    {
+      title: "DART 전환사채권 발행결정 상세 조회",
+      description:
+        "corp_code와 기간으로 '전환사채권발행결정' 주요사항보고서의 상세 조건(권면총액, 전환가액, 만기일, " +
+        "전환으로 발행되는 주식수, 이사회결의일, 청약일, 납입일 등)을 회차별로 조회합니다. " +
+        "dart_disclosure_list로 rcept_no만 확인했다면, 이 도구로 금액·전환가액 같은 실제 조건을 가져올 수 있습니다. " +
+        "2015년 이후 자료만 제공됩니다.",
+      inputSchema: {
+        corp_code: z.string().regex(/^\d{8}$/).describe("dart_find_company로 확인한 8자리 고유번호"),
+        bgn_de: z
+          .string()
+          .regex(/^\d{8}$/)
+          .describe("검색 시작일 YYYYMMDD (2015년 이후)"),
+        end_de: z.string().regex(/^\d{8}$/).describe("검색 종료일 YYYYMMDD"),
+      },
+    },
+    async ({ corp_code, bgn_de, end_de }) => {
+      if (!DART_API_KEY) {
+        return { content: [{ type: "text", text: "서버에 DART_API_KEY가 설정되어 있지 않습니다." }], isError: true };
+      }
+      const url =
+        `https://opendart.fss.or.kr/api/cvbdIsDecsn.json?crtfc_key=${DART_API_KEY}` +
+        `&corp_code=${corp_code}&bgn_de=${bgn_de}&end_de=${end_de}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      return { content: [{ type: "text", text: JSON.stringify(json, null, 2) }] };
+    }
+  );
+
+  // 8) DART 신주인수권부사채권 발행결정 상세 (금액/행사가액/만기일 등 구조화된 조건)
+  server.registerTool(
+    "dart_bw_issuance",
+    {
+      title: "DART 신주인수권부사채권 발행결정 상세 조회",
+      description:
+        "corp_code와 기간으로 '신주인수권부사채권발행결정' 주요사항보고서의 상세 조건(권면총액, 행사가액, 만기일, " +
+        "신주인수권 행사로 발행되는 주식수, 이사회결의일, 청약일, 납입일 등)을 회차별로 조회합니다. " +
+        "dart_disclosure_list로 rcept_no만 확인했다면, 이 도구로 금액·행사가액 같은 실제 조건을 가져올 수 있습니다. " +
+        "2015년 이후 자료만 제공됩니다.",
+      inputSchema: {
+        corp_code: z.string().regex(/^\d{8}$/).describe("dart_find_company로 확인한 8자리 고유번호"),
+        bgn_de: z
+          .string()
+          .regex(/^\d{8}$/)
+          .describe("검색 시작일 YYYYMMDD (2015년 이후)"),
+        end_de: z.string().regex(/^\d{8}$/).describe("검색 종료일 YYYYMMDD"),
+      },
+    },
+    async ({ corp_code, bgn_de, end_de }) => {
+      if (!DART_API_KEY) {
+        return { content: [{ type: "text", text: "서버에 DART_API_KEY가 설정되어 있지 않습니다." }], isError: true };
+      }
+      const url =
+        `https://opendart.fss.or.kr/api/bdwtIsDecsn.json?crtfc_key=${DART_API_KEY}` +
+        `&corp_code=${corp_code}&bgn_de=${bgn_de}&end_de=${end_de}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      return { content: [{ type: "text", text: JSON.stringify(json, null, 2) }] };
+    }
+  );
+
+  // 9) 네이버 뉴스 검색
   server.registerTool(
     "naver_news_search",
     {
@@ -365,7 +429,7 @@ function buildServer() {
     }
   );
 
-  // 8) 구글 뉴스 검색 (RSS, 가입/인증키 불필요)
+  // 10) 구글 뉴스 검색 (RSS, 가입/인증키 불필요)
   server.registerTool(
     "google_news_search",
     {
@@ -387,76 +451,3 @@ function buildServer() {
         return {
           content: [{ type: "text", text: `조회 실패 (HTTP ${res.status})` }],
           isError: true,
-        };
-      }
-      const xmlText = await res.text();
-      try {
-        const parser = new XMLParser({ ignoreAttributes: false });
-        const parsed = parser.parse(xmlText);
-        const itemsRaw = parsed?.rss?.channel?.item || [];
-        const items = Array.isArray(itemsRaw) ? itemsRaw : [itemsRaw];
-        const results = items.slice(0, display).map((it) => ({
-          title: it.title,
-          link: it.link,
-          pubDate: it.pubDate,
-          source:
-            it.source && typeof it.source === "object" ? it.source["#text"] : it.source,
-        }));
-        if (results.length === 0) {
-          return {
-            content: [{ type: "text", text: `'${query}'(으)로 검색된 뉴스가 없습니다.` }],
-          };
-        }
-        return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
-      } catch (e) {
-        return {
-          content: [{ type: "text", text: `RSS 파싱 오류: ${e.message}` }],
-          isError: true,
-        };
-      }
-    }
-  );
-
-  return server;
-}
-
-// ---------------------------------------------------------------------------
-// HTTP (Streamable HTTP transport) - Claude 커스텀 커넥터가 이 엔드포인트로 접속합니다.
-// ---------------------------------------------------------------------------
-const app = express();
-app.use(express.json());
-
-app.get("/", (_req, res) => {
-  res.send("kr-corporate-data MCP server is running. Connect to POST/GET /mcp");
-});
-
-// 무상태(stateless) 모드: 요청마다 새 서버/트랜스포트를 만들고 끝나면 버립니다.
-// Render 무료 요금제는 안 쓰면 서버가 재시작되는데, 세션을 메모리에 들고 있으면
-// 재시작 직후 "Server not initialized" 오류가 나기 쉬워서 이 방식이 더 안정적입니다.
-app.all("/mcp", async (req, res) => {
-  try {
-    const server = buildServer();
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined, // 세션을 추적하지 않음 (요청마다 독립 처리)
-    });
-    res.on("close", () => {
-      transport.close();
-      server.close();
-    });
-    await server.connect(transport);
-    await transport.handleRequest(req, res, req.body);
-  } catch (err) {
-    console.error("MCP request error:", err);
-    if (!res.headersSent) {
-      res.status(500).json({ error: "internal_error", message: String(err) });
-    }
-  }
-});
-
-app.listen(PORT, () => {
-  console.log(`kr-corporate-data MCP server listening on port ${PORT}`);
-  console.log(`  NTS_SERVICE_KEY set:     ${Boolean(NTS_SERVICE_KEY)}`);
-  console.log(`  DART_API_KEY set:        ${Boolean(DART_API_KEY)}`);
-  console.log(`  NAVER_APIHUB_KEY_ID set: ${Boolean(NAVER_APIHUB_KEY_ID)}`);
-  console.log(`  NAVER_APIHUB_KEY set:    ${Boolean(NAVER_APIHUB_KEY)}`);
-});
